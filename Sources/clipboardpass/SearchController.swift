@@ -17,7 +17,7 @@ final class SpotlightRowView: NSTableRowView {
     }
 }
 
-final class SearchController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private let width: CGFloat = 680
     private let searchH: CGFloat = 58
     private let rowH: CGFloat = 44
@@ -36,6 +36,9 @@ final class SearchController: NSObject, NSTextFieldDelegate, NSTableViewDataSour
     private var filtered: [String] = []
     private var originX: CGFloat = 0
     private var topY: CGFloat = 0
+    // Set while we present our own modal (delete confirm) so the click-away
+    // auto-hide doesn't fire when the panel temporarily loses key.
+    private var suppressAutoHide = false
 
     override init() {
         super.init()
@@ -55,6 +58,7 @@ final class SearchController: NSObject, NSTextFieldDelegate, NSTableViewDataSour
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
+        panel.delegate = self
 
         container = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: searchH))
         container.material = .menu
@@ -86,7 +90,7 @@ final class SearchController: NSObject, NSTextFieldDelegate, NSTableViewDataSour
         field.cell?.wraps = false
         field.cell?.isScrollable = true
         field.placeholderAttributedString = NSAttributedString(
-            string: "Search Password",
+            string: "Password Search",
             attributes: [.foregroundColor: NSColor.tertiaryLabelColor,
                          .font: NSFont.systemFont(ofSize: 26, weight: .light)])
         container.addSubview(field)
@@ -154,6 +158,13 @@ final class SearchController: NSObject, NSTextFieldDelegate, NSTableViewDataSour
     }
 
     func hide() { panel.orderOut(nil) }
+
+    // Dismiss when the panel loses focus (click on another app/window/desktop),
+    // unless we're showing our own modal (the delete confirmation).
+    func windowDidResignKey(_ notification: Notification) {
+        guard !suppressAutoHide, panel.isVisible else { return }
+        hide()
+    }
 
     /// Resizes the panel to fit the result count, keeping the search bar pinned
     /// to the top (Spotlight grows downward).
@@ -224,7 +235,10 @@ final class SearchController: NSObject, NSTextFieldDelegate, NSTableViewDataSour
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
+        suppressAutoHide = true
         let confirmed = alert.runModal() == .alertFirstButtonReturn
+        suppressAutoHide = false
+        panel.makeKeyAndOrderFront(nil)
         guard confirmed else { panel.makeFirstResponder(field); return }
 
         KeychainStore.delete(label: label)
