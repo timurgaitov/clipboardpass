@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.timurgaitov.clipboardpass</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.0.1</string>
     <key>CFBundleExecutable</key>
     <string>clipboardpass</string>
     <key>CFBundlePackageType</key>

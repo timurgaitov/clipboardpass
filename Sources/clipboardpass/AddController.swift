@@ -4,11 +4,15 @@ final class AddController: NSObject {
     private var window: NSWindow!
     private let labelField = NSTextField()
     private let passField = NSSecureTextField()
+    // Invisible account field paired with the password so macOS still offers
+    // password AutoFill; the autofilled login lands here, never in Label.
+    private let decoyAccount = NSTextField()
 
     func showWindow() {
         if window == nil { build() }
         labelField.stringValue = ""
         passField.stringValue = ""
+        decoyAccount.stringValue = ""
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -36,13 +40,20 @@ final class AddController: NSObject {
             f.placeholderString = placeholder
         }
 
-        // Password first so macOS AutoFill has no preceding text field to drop
-        // the login into; Label below stays whatever the user types.
+        // Visible form is just Password + Label.
         c.addSubview(label("Password", h - 50)); place(passField, h - 50, "secret");          c.addSubview(passField)
         c.addSubview(label("Label", h - 88));    place(labelField, h - 88, "e.g. Work VPN");  c.addSubview(labelField)
 
-        // One-directional key loop: nothing points to passField, so it has no
-        // previousKeyView for AutoFill to treat as the username field.
+        // Throwaway account field, invisible but present in the key loop just
+        // before the password. macOS needs a paired account field to offer
+        // password AutoFill; the filled login goes here instead of into Label.
+        decoyAccount.frame = NSRect(x: 104, y: h - 28, width: w - 120, height: 20)
+        decoyAccount.alphaValue = 0
+        c.addSubview(decoyAccount)
+
+        // decoyAccount precedes passField → it becomes passField.previousKeyView,
+        // the field AutoFill treats as the username. Tabbing stays Password → Label.
+        decoyAccount.nextKeyView = passField
         passField.nextKeyView = labelField
         window.initialFirstResponder = passField
 
