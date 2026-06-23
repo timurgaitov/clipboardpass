@@ -86,7 +86,7 @@ final class SearchController: NSObject, NSTextFieldDelegate, NSTableViewDataSour
         field.cell?.wraps = false
         field.cell?.isScrollable = true
         field.placeholderAttributedString = NSAttributedString(
-            string: "Password label",
+            string: "Search Password",
             attributes: [.foregroundColor: NSColor.tertiaryLabelColor,
                          .font: NSFont.systemFont(ofSize: 26, weight: .light)])
         container.addSubview(field)
