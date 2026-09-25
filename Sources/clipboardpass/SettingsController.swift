@@ -3,11 +3,13 @@ import AppKit
 /// A button that records a global shortcut: click it, then press the desired
 /// key combination (must include at least one of ⌘/⌃/⌥). Esc cancels.
 final class RecorderButton: NSButton {
+    let kind: ShortcutKind
     var onChange: ((Shortcut) -> Void)?
     private var monitor: Any?
     private var recording = false { didSet { refreshTitle() } }
 
-    override init(frame: NSRect) {
+    init(kind: ShortcutKind, frame: NSRect) {
+        self.kind = kind
         super.init(frame: frame)
         bezelStyle = .rounded
         setButtonType(.momentaryPushIn)
@@ -18,8 +20,8 @@ final class RecorderButton: NSButton {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    private func refreshTitle() {
-        title = recording ? "Press shortcut…  (Esc to cancel)" : ShortcutStore.current.display
+    func refreshTitle() {
+        title = recording ? "Press shortcut…  (Esc to cancel)" : ShortcutStore.current(kind).display
     }
 
     @objc private func toggle() {
@@ -52,29 +54,34 @@ final class RecorderButton: NSButton {
         let shortcut = Shortcut(keyCode: UInt32(event.keyCode),
                                 carbonModifiers: carbonModifiers(from: flags),
                                 display: modifierSymbols(from: flags) + keyLabel)
-        ShortcutStore.save(shortcut)
+
+        // Refuse a combo the other hot key already uses.
+        let other = ShortcutKind.allCases.first { $0 != kind }!
+        if ShortcutStore.current(other) == shortcut { NSSound.beep(); return }
+
+        ShortcutStore.save(shortcut, for: kind)
         stop()
         onChange?(shortcut)
     }
 }
 
 final class SettingsController: NSObject {
-    /// Called after the shortcut changes, so the rest of the app can rebind.
-    var onShortcutChange: ((Shortcut) -> Void)?
+    /// Called after a shortcut changes, so the rest of the app can rebind.
+    var onShortcutChange: ((ShortcutKind, Shortcut) -> Void)?
 
     private var window: NSWindow!
-    private var recorder: RecorderButton!
+    private var recorders: [RecorderButton] = []
 
     func showWindow() {
         if window == nil { build() }
-        recorder.title = ShortcutStore.current.display
+        recorders.forEach { $0.refreshTitle() }
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
 
     private func build() {
-        let w: CGFloat = 420, h: CGFloat = 140
+        let w: CGFloat = 440, h: CGFloat = 176
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
                           styleMask: [.titled, .closable],
                           backing: .buffered, defer: false)
@@ -83,21 +90,27 @@ final class SettingsController: NSObject {
 
         let c = NSView(frame: NSRect(x: 0, y: 0, width: w, height: h))
 
-        let label = NSTextField(labelWithString: "Global shortcut:")
-        label.frame = NSRect(x: 20, y: h - 64, width: 130, height: 22)
-        c.addSubview(label)
+        let rows: [(String, ShortcutKind)] = [("Copy password:", .password), ("Copy username:", .username)]
+        for (i, (text, kind)) in rows.enumerated() {
+            let y = h - 64 - CGFloat(i) * 40
+            let label = NSTextField(labelWithString: text)
+            label.frame = NSRect(x: 20, y: y, width: 130, height: 22)
+            c.addSubview(label)
 
-        recorder = RecorderButton(frame: NSRect(x: 156, y: h - 68, width: 244, height: 30))
-        recorder.onChange = { [weak self] shortcut in
-            self?.recorder.title = shortcut.display
-            self?.onShortcutChange?(shortcut)
+            let recorder = RecorderButton(kind: kind, frame: NSRect(x: 156, y: y - 4, width: 264, height: 30))
+            recorder.onChange = { [weak self] shortcut in
+                self?.onShortcutChange?(kind, shortcut)
+            }
+            c.addSubview(recorder)
+            recorders.append(recorder)
         }
-        c.addSubview(recorder)
 
-        let hint = NSTextField(labelWithString: "Click, then press a combo including ⌘, ⌃, or ⌥.")
+        let hint = NSTextField(labelWithString: "Click, then press a combo including ⌘, ⌃, or ⌥. Each opens the search panel; ⏎ copies that field.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
-        hint.frame = NSRect(x: 20, y: 20, width: w - 40, height: 18)
+        hint.frame = NSRect(x: 20, y: 20, width: w - 40, height: 32)
+        hint.lineBreakMode = .byWordWrapping
+        hint.maximumNumberOfLines = 2
         c.addSubview(hint)
 
         window.contentView = c

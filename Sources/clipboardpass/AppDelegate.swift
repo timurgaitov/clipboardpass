@@ -2,10 +2,10 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
-    private var searchMenuItem: NSMenuItem!
+    private var searchMenuItems: [ShortcutKind: NSMenuItem] = [:]
     private var loginMenuItem: NSMenuItem!
     private let search = SearchController()
-    private let add = AddController()
+    private let form = EntryFormController()
     private let settings = SettingsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -16,29 +16,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.delegate = self
-        searchMenuItem = menu.addItem(withTitle: searchTitle(), action: #selector(showSearch), keyEquivalent: "")
-        searchMenuItem.target = self
-        let addItem = menu.addItem(withTitle: "Add Password…", action: #selector(showAdd), keyEquivalent: "")
+        // Alphabetical within each group.
+        let addItem = menu.addItem(withTitle: "Add Password", action: #selector(showAdd), keyEquivalent: "")
         addItem.target = self
-        let settingsItem = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
-        settingsItem.target = self
+        let deleteItem = menu.addItem(withTitle: "Delete Password", action: #selector(showDeleteSearch), keyEquivalent: "")
+        deleteItem.target = self
+        let editItem = menu.addItem(withTitle: "Edit Password", action: #selector(showEditSearch), keyEquivalent: "")
+        editItem.target = self
+        let passItem = menu.addItem(withTitle: menuTitle(.password), action: #selector(showPasswordSearch), keyEquivalent: "")
+        passItem.target = self
+        searchMenuItems[.password] = passItem
+        let userItem = menu.addItem(withTitle: menuTitle(.username), action: #selector(showUsernameSearch), keyEquivalent: "")
+        userItem.target = self
+        searchMenuItems[.username] = userItem
+        menu.addItem(.separator())
         loginMenuItem = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginMenuItem.target = self
+        let settingsItem = menu.addItem(withTitle: "Settings", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit clipboardpass", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
 
-        HotKeyManager.shared.setHandler { [weak self] in self?.search.toggle() }
-        HotKeyManager.shared.apply(ShortcutStore.current)
+        search.onEdit = { [weak self] entry in self?.form.showEdit(entry) }
 
-        settings.onShortcutChange = { [weak self] shortcut in
-            HotKeyManager.shared.apply(shortcut)
-            self?.searchMenuItem.title = self?.searchTitle() ?? "Search Passwords"
+        HotKeyManager.shared.setHandler { [weak self] kind in
+            self?.search.toggle(kind == .password ? .password : .username)
+        }
+        for kind in ShortcutKind.allCases {
+            bind(ShortcutStore.current(kind), for: kind)
+        }
+
+        settings.onShortcutChange = { [weak self] kind, shortcut in
+            self?.bind(shortcut, for: kind)
+            self?.searchMenuItems[kind]?.title = self?.menuTitle(kind) ?? kind.title
         }
     }
 
-    private func searchTitle() -> String {
-        "Search Passwords  (\(ShortcutStore.current.display))"
+    private func bind(_ shortcut: Shortcut, for kind: ShortcutKind) {
+        if !HotKeyManager.shared.apply(shortcut, for: kind) {
+            Notify.show(title: "Couldn’t bind \(shortcut.display)",
+                        body: "Another app may already use it. Pick a different combo in Settings.")
+        }
+    }
+
+    private func menuTitle(_ kind: ShortcutKind) -> String {
+        "\(kind.title)  (\(ShortcutStore.current(kind).display))"
     }
 
     // Refresh the checkmark each time the menu opens.
@@ -46,8 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginMenuItem.state = LoginItem.isEnabled ? .on : .off
     }
 
-    @objc private func showSearch() { search.show() }
-    @objc private func showAdd() { add.showWindow() }
+    @objc private func showPasswordSearch() { search.show(.password) }
+    @objc private func showUsernameSearch() { search.show(.username) }
+    @objc private func showAdd() { form.showAdd() }
+    @objc private func showEditSearch() { search.show(.edit) }
+    @objc private func showDeleteSearch() { search.show(.delete) }
     @objc private func showSettings() { settings.showWindow() }
 
     @objc private func toggleLaunchAtLogin() {

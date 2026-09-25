@@ -2,9 +2,19 @@ import Foundation
 import Security
 import LocalAuthentication
 
+/// One stored login. `label` is the unique key; `username` is optional metadata.
+struct Entry: Equatable {
+    var label: String
+    var username: String
+}
+
 /// Stores secrets as generic-password Keychain items in the login keychain,
 /// owned by THIS app (an app-scoped ACL means other apps get a confirmation
 /// prompt). Reads are gated behind Touch ID in-app.
+///
+/// The label lives in kSecAttrAccount, the username in kSecAttrComment (both
+/// are plain attributes, readable without authentication, and visible in
+/// Keychain Access). Only the password is in kSecValueData.
 ///
 /// Note: true Secure-Enclave / biometric-bound Keychain items require an
 /// `application-identifier` entitlement, which needs a Developer ID signing
@@ -14,8 +24,8 @@ import LocalAuthentication
 enum KeychainStore {
     static let service = "com.clipboardpass.passwords"
 
-    /// Returns the labels of all stored entries (no secrets are read here).
-    static func list() -> [String] {
+    /// Returns all stored entries (no secrets are read here).
+    static func list() -> [Entry] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -26,21 +36,46 @@ enum KeychainStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let items = result as? [[String: Any]] else { return [] }
         return items
-            .compactMap { $0[kSecAttrAccount as String] as? String }
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            .compactMap { item -> Entry? in
+                guard let label = item[kSecAttrAccount as String] as? String else { return nil }
+                return Entry(label: label, username: item[kSecAttrComment as String] as? String ?? "")
+            }
+            .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
     }
 
+    /// Adds (or replaces) an entry.
     @discardableResult
-    static func add(label: String, secret: String) -> Bool {
+    static func add(label: String, username: String = "", secret: String) -> Bool {
         delete(label: label) // upsert
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: label,
+            kSecAttrComment as String: username,
             kSecValueData as String: Data(secret.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
         return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// Renames / re-labels an existing entry and optionally replaces its
+    /// secret. Passing `secret: nil` keeps the stored password untouched.
+    @discardableResult
+    static func update(label: String, newLabel: String, username: String, secret: String?) -> Bool {
+        if newLabel != label, list().contains(where: { $0.label == newLabel }) {
+            delete(label: newLabel) // upsert semantics, same as add()
+        }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: label,
+        ]
+        var attrs: [String: Any] = [
+            kSecAttrAccount as String: newLabel,
+            kSecAttrComment as String: username,
+        ]
+        if let secret { attrs[kSecValueData as String] = Data(secret.utf8) }
+        return SecItemUpdate(query as CFDictionary, attrs as CFDictionary) == errSecSuccess
     }
 
     @discardableResult

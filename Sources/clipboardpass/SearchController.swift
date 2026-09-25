@@ -2,8 +2,14 @@ import AppKit
 
 /// Borderless panels won't accept keyboard focus unless we say so.
 final class KeyablePanel: NSPanel {
+    /// Gets first crack at ⌘-key chords (e.g. ⌘E) before the field editor.
+    var onKeyEquivalent: ((NSEvent) -> Bool)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if onKeyEquivalent?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 /// Draws a rounded, inset accent highlight like Spotlight's results.
@@ -17,7 +23,68 @@ final class SpotlightRowView: NSTableRowView {
     }
 }
 
+/// Label on the left, username in a quieter color on the right.
+final class EntryCellView: NSTableCellView {
+    let nameField = NSTextField(labelWithString: "")
+    let userField = NSTextField(labelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        nameField.font = NSFont.systemFont(ofSize: 15)
+        nameField.lineBreakMode = .byTruncatingTail
+        userField.font = NSFont.systemFont(ofSize: 13)
+        userField.lineBreakMode = .byTruncatingMiddle
+        userField.alignment = .right
+        for f in [nameField, userField] {
+            f.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(f)
+        }
+        nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        userField.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        NSLayoutConstraint.activate([
+            nameField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            nameField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            userField.leadingAnchor.constraint(greaterThanOrEqualTo: nameField.trailingAnchor, constant: 16),
+            userField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            userField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            userField.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, multiplier: 0.5),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setSelected(_ selected: Bool) {
+        nameField.textColor = selected ? .white : .labelColor
+        userField.textColor = selected ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
+    }
+}
+
 final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+    /// What ⏎ does to the selected entry. Switching modes keeps the panel and
+    /// the typed query.
+    enum Mode {
+        case password, username, edit, delete
+
+        var placeholder: String {
+            switch self {
+            case .password: return "Password Search"
+            case .username: return "Username Search"
+            case .edit:     return "Edit Password"
+            case .delete:   return "Delete Password"
+            }
+        }
+        var badge: String {
+            switch self {
+            case .password: return "⏎ password"
+            case .username: return "⏎ username"
+            case .edit:     return "⏎ edit"
+            case .delete:   return "⏎ delete"
+            }
+        }
+    }
+
+    /// Asked to open the edit form for an entry (⌘E).
+    var onEdit: ((Entry) -> Void)?
+
     private let width: CGFloat = 680
     private let searchH: CGFloat = 58
     private let rowH: CGFloat = 44
@@ -28,12 +95,14 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
     private var container: NSVisualEffectView!
     private let magnifier = NSImageView()
     private let field = NSTextField()
+    private let modeBadge = NSTextField(labelWithString: "")
     private let separator = NSBox()
     private let scroll = NSScrollView()
     private let tableView = NSTableView()
 
-    private var entries: [String] = []
-    private var filtered: [String] = []
+    private(set) var mode: Mode = .password
+    private var entries: [Entry] = []
+    private var filtered: [Entry] = []
     private var originX: CGFloat = 0
     private var topY: CGFloat = 0
     // Set while we present our own modal (delete confirm) so the click-away
@@ -59,6 +128,7 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.delegate = self
+        panel.onKeyEquivalent = { [weak self] event in self?.handleKeyEquivalent(event) ?? false }
 
         container = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: searchH))
         container.material = .menu
@@ -89,11 +159,12 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         field.cell?.usesSingleLineMode = true
         field.cell?.wraps = false
         field.cell?.isScrollable = true
-        field.placeholderAttributedString = NSAttributedString(
-            string: "Password Search",
-            attributes: [.foregroundColor: NSColor.tertiaryLabelColor,
-                         .font: NSFont.systemFont(ofSize: 26, weight: .light)])
         container.addSubview(field)
+
+        modeBadge.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        modeBadge.textColor = .secondaryLabelColor
+        modeBadge.alignment = .right
+        container.addSubview(modeBadge)
 
         separator.boxType = .separator
         container.addSubview(separator)
@@ -117,6 +188,8 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         tableView.doubleAction = #selector(activateSelection)
         scroll.documentView = tableView
         container.addSubview(scroll)
+
+        applyMode()
     }
 
     /// A resizable rounded-rect mask so the material rounds at any panel height.
@@ -132,13 +205,28 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         return img
     }
 
-    // MARK: - Show / hide
-
-    func toggle() {
-        if panel.isVisible { hide() } else { show() }
+    private func applyMode() {
+        field.placeholderAttributedString = NSAttributedString(
+            string: mode.placeholder,
+            attributes: [.foregroundColor: NSColor.tertiaryLabelColor,
+                         .font: NSFont.systemFont(ofSize: 26, weight: .light)])
+        modeBadge.stringValue = mode.badge
     }
 
-    func show() {
+    // MARK: - Show / hide
+
+    /// Hot-key behaviour: same mode again → hide; other mode → switch in place.
+    func toggle(_ newMode: Mode) {
+        if panel.isVisible {
+            if newMode == mode { hide() } else { switchMode(newMode) }
+        } else {
+            show(newMode)
+        }
+    }
+
+    func show(_ newMode: Mode = .password) {
+        mode = newMode
+        applyMode()
         entries = KeychainStore.list()
         filtered = entries
         field.stringValue = ""
@@ -154,6 +242,12 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
 
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(field)
+    }
+
+    private func switchMode(_ newMode: Mode) {
+        mode = newMode
+        applyMode()
         panel.makeFirstResponder(field)
     }
 
@@ -180,8 +274,10 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         container.frame = NSRect(x: 0, y: 0, width: width, height: H)
 
         let bandCenter = H - searchH / 2
+        let badgeW: CGFloat = 96
         magnifier.frame = NSRect(x: 24, y: bandCenter - 13, width: 26, height: 26)
-        field.frame = NSRect(x: 58, y: bandCenter - 19, width: width - 58 - 24, height: 36)
+        field.frame = NSRect(x: 58, y: bandCenter - 19, width: width - 58 - badgeW - 32, height: 36)
+        modeBadge.frame = NSRect(x: width - badgeW - 24, y: bandCenter - 9, width: badgeW, height: 18)
 
         separator.isHidden = !hasResults
         separator.frame = NSRect(x: 16, y: H - searchH, width: width - 32, height: 1)
@@ -198,11 +294,17 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
 
     // MARK: - Filtering & key handling
 
-    func controlTextDidChange(_ obj: Notification) {
+    private func refilter() {
         let q = field.stringValue
-        filtered = q.isEmpty ? entries : entries.filter { $0.localizedCaseInsensitiveContains(q) }
+        filtered = q.isEmpty ? entries : entries.filter {
+            $0.label.localizedCaseInsensitiveContains(q) || $0.username.localizedCaseInsensitiveContains(q)
+        }
         tableView.reloadData()
         relayout()
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        refilter()
         selectFirstRow()
     }
 
@@ -217,19 +319,39 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         case #selector(NSResponder.moveUp(_:)):
             moveSelection(-1); return true
         case #selector(NSStandardKeyBindingResponding.deleteToBeginningOfLine(_:)): // ⌘⌫
-            deleteSelected(); return true
+            deleteSelected(thenHide: false); return true
         default:
             return false
         }
     }
 
-    private func deleteSelected() {
+    private func handleKeyEquivalent(_ event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard mods == .command, event.charactersIgnoringModifiers == "e" else { return false }
+        editSelected()
+        return true
+    }
+
+    private var selectedEntry: Entry? {
         let row = tableView.selectedRow
-        guard row >= 0, row < filtered.count else { return }
-        let label = filtered[row]
+        guard row >= 0, row < filtered.count else { return nil }
+        return filtered[row]
+    }
+
+    private func editSelected() {
+        guard let entry = selectedEntry else { NSSound.beep(); return }
+        hide()
+        onEdit?(entry)
+    }
+
+    /// Confirms, then deletes. In delete mode the panel closes afterwards;
+    /// via ⌘⌫ it stays open so several entries can be removed in a row.
+    private func deleteSelected(thenHide: Bool) {
+        let row = tableView.selectedRow
+        guard let entry = selectedEntry else { return }
 
         let alert = NSAlert()
-        alert.messageText = "Delete “\(label)”?"
+        alert.messageText = "Delete “\(entry.label)”?"
         alert.informativeText = "This removes the stored password from clipboardpass."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete")
@@ -241,12 +363,11 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         panel.makeKeyAndOrderFront(nil)
         guard confirmed else { panel.makeFirstResponder(field); return }
 
-        KeychainStore.delete(label: label)
+        KeychainStore.delete(label: entry.label)
+        Notify.show(title: "Deleted “\(entry.label)”", body: "Removed from clipboardpass.")
+        if thenHide { hide(); return }
         entries = KeychainStore.list()
-        let q = field.stringValue
-        filtered = q.isEmpty ? entries : entries.filter { $0.localizedCaseInsensitiveContains(q) }
-        tableView.reloadData()
-        relayout()
+        refilter()
         if !filtered.isEmpty {
             tableView.selectRowIndexes(IndexSet(integer: min(row, filtered.count - 1)),
                                        byExtendingSelection: false)
@@ -261,20 +382,33 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
         tableView.scrollRowToVisible(next)
     }
 
-    // MARK: - Copy (Touch ID gated)
+    // MARK: - ⏎ action
 
     @objc private func activateSelection() {
-        let row = tableView.selectedRow
-        guard row >= 0, row < filtered.count else { return }
-        let label = filtered[row]
-        hide() // return focus to the previous app before authenticating
-        // Touch ID is enforced by the Secure Enclave inside secret(label:reason:):
-        // the keychain won't release the data until the context is satisfied.
-        KeychainStore.secret(label: label, reason: "unlock “\(label)” to copy its password") { secret in
-            guard let secret else { return }
-            Clipboard.copy(secret)
-            Notify.show(title: "Copied “\(label)”",
-                        body: "Password is on the clipboard. Clears in 45s.")
+        guard let entry = selectedEntry else { return }
+
+        switch mode {
+        case .edit:
+            editSelected()
+        case .delete:
+            deleteSelected(thenHide: true)
+        case .username:
+            hide()
+            // Usernames are plain keychain attributes, not secrets: no Touch ID.
+            guard !entry.username.isEmpty else {
+                Notify.show(title: "No username for “\(entry.label)”", body: "Press ⌘E in the search panel to add one.")
+                return
+            }
+            Clipboard.copyPlain(entry.username)
+            Notify.show(title: "Copied username for “\(entry.label)”", body: entry.username)
+        case .password:
+            hide() // return focus to the previous app before authenticating
+            KeychainStore.secret(label: entry.label, reason: "unlock “\(entry.label)” to copy its password") { secret in
+                guard let secret else { return }
+                Clipboard.copy(secret)
+                Notify.show(title: "Copied “\(entry.label)”",
+                            body: "Password is on the clipboard. Clears in 45s.")
+            }
         }
     }
 
@@ -289,33 +423,23 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
     func tableViewSelectionDidChange(_ notification: Notification) {
         // Refresh text colors so the selected row reads white on accent.
         tableView.enumerateAvailableRowViews { rowView, index in
-            if let cell = rowView.view(atColumn: 0) as? NSTableCellView {
-                cell.textField?.textColor = (index == tableView.selectedRow) ? .white : .labelColor
-            }
+            (rowView.view(atColumn: 0) as? EntryCellView)?.setSelected(index == tableView.selectedRow)
         }
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("cell")
-        let cell: NSTableCellView
-        if let reused = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView {
+        let cell: EntryCellView
+        if let reused = tableView.makeView(withIdentifier: id, owner: self) as? EntryCellView {
             cell = reused
         } else {
-            cell = NSTableCellView()
+            cell = EntryCellView(frame: .zero)
             cell.identifier = id
-            let tf = NSTextField(labelWithString: "")
-            tf.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(tf)
-            cell.textField = tf
-            NSLayoutConstraint.activate([
-                tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 20),
-                tf.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -20),
-                tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            ])
         }
-        cell.textField?.stringValue = filtered[row]
-        cell.textField?.font = NSFont.systemFont(ofSize: 15)
-        cell.textField?.textColor = (row == tableView.selectedRow) ? .white : .labelColor
+        let entry = filtered[row]
+        cell.nameField.stringValue = entry.label
+        cell.userField.stringValue = entry.username
+        cell.setSelected(row == tableView.selectedRow)
         return cell
     }
 }

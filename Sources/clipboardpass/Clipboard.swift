@@ -19,4 +19,11 @@ enum Clipboard {
             }
         }
     }
+
+    /// Plain copy for non-secret text (usernames): no auto-clear, no concealment.
+    static func copyPlain(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
 }
