@@ -296,9 +296,7 @@ final class SearchController: NSObject, NSWindowDelegate, NSTextFieldDelegate, N
 
     private func refilter() {
         let q = field.stringValue
-        filtered = q.isEmpty ? entries : entries.filter {
-            $0.label.localizedCaseInsensitiveContains(q) || $0.username.localizedCaseInsensitiveContains(q)
-        }
+        filtered = q.isEmpty ? entries : entries.filter { $0.label.localizedCaseInsensitiveContains(q) }
         tableView.reloadData()
         relayout()
     }
