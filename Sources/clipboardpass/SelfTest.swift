@@ -41,14 +41,28 @@ enum SelfTest {
         check("list is case-insensitively sorted", listed == [a, b, c])
         [a, b, c].forEach { KeychainStore.delete(label: $0) }
 
-        // Shortcut persistence round-trips; restore the user's real values after.
+        // Shortcut persistence round-trips; restore the user's real values after
+        // (unsaved stays unsaved, so defaults still apply).
+        let saved = ShortcutKind.allCases.map { ($0, ShortcutStore.isSaved($0), ShortcutStore.current($0)) }
+        func restoreShortcuts() {
+            for (kind, wasSaved, original) in saved {
+                if wasSaved { ShortcutStore.save(original, for: kind) } else { ShortcutStore.reset(kind) }
+            }
+        }
         for kind in ShortcutKind.allCases {
-            let original = ShortcutStore.current(kind)
             ShortcutStore.save(Shortcut(keyCode: 49, carbonModifiers: 256, display: "⌘Space"), for: kind)
             check("\(kind) shortcut persists keyCode", ShortcutStore.current(kind).keyCode == 49)
             check("\(kind) shortcut persists display", ShortcutStore.current(kind).display == "⌘Space")
-            ShortcutStore.save(original, for: kind)
         }
+        restoreShortcuts()
+
+        // A saved password shortcut equal to the username default is dropped.
+        ShortcutStore.reset(.username)
+        ShortcutStore.save(ShortcutKind.username.defaultShortcut, for: .password)
+        ShortcutStore.resolveConflicts()
+        check("conflicting saved shortcut is reset",
+              !ShortcutStore.isSaved(.password) && ShortcutStore.current(.password) == ShortcutKind.password.defaultShortcut)
+        restoreShortcuts()
         check("shortcut kinds have distinct defaults",
               ShortcutKind.password.defaultShortcut != ShortcutKind.username.defaultShortcut)
 

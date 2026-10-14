@@ -8,12 +8,12 @@ Password manager for the cases when built-in mac passwords app does not fit. For
 brew install --cask timurgaitov/tap/clipboardpass
 ```
 
-Launch it once (adds a menu-bar icon), add a password, then press `⌘\` to search and copy behind Touch ID.
+Launch it once (adds a menu-bar icon), add a password, then press `⇧⌘\` to search and copy behind Touch ID.
 
 ## Shortcuts
 
-- `⌘\` — open the search panel; `⏎` copies the **password** (asks for Touch ID)
-- `⇧⌘\` — open the search panel; `⏎` copies the **username** (no Touch ID)
+- `⇧⌘\` — open the search panel; `⏎` copies the **password** (asks for Touch ID)
+- `⌘\` — open the search panel; `⏎` copies the **username** (no Touch ID)
 - Pressing the other shortcut while the panel is open switches mode and keeps your query
 - `↑` / `↓` — move the selection
 - `⌘E` — edit the selected entry (label, username; leave password blank to keep it)

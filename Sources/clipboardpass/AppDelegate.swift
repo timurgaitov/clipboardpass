@@ -8,10 +8,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let form = EntryFormController()
     private let settings = SettingsController()
 
+    /// key.2.on.ring.fill knocked out of a filled rounded square; template so it follows the menu bar appearance.
+    private static func statusIcon() -> NSImage {
+        let size = NSSize(width: 22, height: 22)
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        let symbol = NSImage(systemSymbolName: "key.2.on.ring.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4).fill()
+            if let symbol {
+                let s = symbol.size
+                let r = NSRect(x: rect.midX - s.width / 2, y: rect.midY - s.height / 2, width: s.width, height: s.height)
+                symbol.draw(in: r, from: .zero, operation: .destinationOut, fraction: 1)
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "clipboardpass"
+        return image
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "asterisk.circle.fill", accessibilityDescription: "clipboardpass")
+            button.image = Self.statusIcon()
         }
 
         let menu = NSMenu()
@@ -43,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HotKeyManager.shared.setHandler { [weak self] kind in
             self?.search.toggle(kind == .password ? .password : .username)
         }
+        ShortcutStore.resolveConflicts()
         for kind in ShortcutKind.allCases {
             bind(ShortcutStore.current(kind), for: kind)
         }

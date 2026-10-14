@@ -20,15 +20,15 @@ enum ShortcutKind: CaseIterable {
         }
     }
 
-    /// Defaults: ⌘\ for passwords, ⌘⇧\ for usernames (kVK_ANSI_Backslash = 0x2A).
+    /// Defaults: ⇧⌘\ for passwords, ⌘\ for usernames (kVK_ANSI_Backslash = 0x2A).
     var defaultShortcut: Shortcut {
         switch self {
         case .password:
             return Shortcut(keyCode: UInt32(kVK_ANSI_Backslash),
-                            carbonModifiers: UInt32(cmdKey), display: "⌘\\")
+                            carbonModifiers: UInt32(cmdKey | shiftKey), display: "⇧⌘\\")
         case .username:
             return Shortcut(keyCode: UInt32(kVK_ANSI_Backslash),
-                            carbonModifiers: UInt32(cmdKey | shiftKey), display: "⇧⌘\\")
+                            carbonModifiers: UInt32(cmdKey), display: "⌘\\")
         }
     }
 
@@ -64,6 +64,24 @@ enum ShortcutStore {
         d.set(Int(s.keyCode), forKey: p + ".keyCode")
         d.set(Int(s.carbonModifiers), forKey: p + ".carbonModifiers")
         d.set(s.display, forKey: p + ".display")
+    }
+
+    static func isSaved(_ kind: ShortcutKind) -> Bool {
+        d.object(forKey: kind.defaultsPrefix + ".keyCode") != nil
+    }
+
+    static func reset(_ kind: ShortcutKind) {
+        let p = kind.defaultsPrefix
+        for key in [".keyCode", ".carbonModifiers", ".display"] { d.removeObject(forKey: p + key) }
+    }
+
+    /// 1.1.1 swapped the defaults (⌘\ ↔ ⇧⌘\), so a shortcut saved under the old
+    /// ones can collide with the other kind's new default. Drop the saved one so
+    /// both bind.
+    static func resolveConflicts() {
+        let pw = current(.password), user = current(.username)
+        guard pw.keyCode == user.keyCode, pw.carbonModifiers == user.carbonModifiers else { return }
+        for kind in ShortcutKind.allCases where isSaved(kind) { reset(kind) }
     }
 }
 
